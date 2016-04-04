@@ -4,7 +4,7 @@ import traceback
 import time
 import sys
 import string
-
+from struct import pack, unpack
 
 MAX_TRIES = 5
 T1 = 0.5
@@ -25,6 +25,7 @@ ACK = chr(0x06)
 NAK = chr(0x15)
 ETX = chr(0x03)
 EOT = chr(0x04)
+U = chr(0x55)
 password = 0000
 OK = 0
 
@@ -79,15 +80,10 @@ class kkmException(Exception):
 class KKM:
         def __init__(self,conn, password):
                 self.conn     = conn
-                self.password = 0000
-                if self.__checkState()!=ACK:
-                        buffer=''
-                        while self.conn.inWaiting():
-                                buffer += self.conn.read()
-                        self.conn.write(ENQ)
-                        time.sleep(0.3)
-                        if self.conn.read(1)!=ACK:
-                                raise RuntimeError("ACK expected")
+                self.conn.write(ENQ)
+                time.sleep(0.3)
+                if self.conn.read(1)!=ACK:
+                    raise RuntimeError("ACK expected")
         def __checkState(self):
             """Проверить на готовность"""
             self.conn.write(ENQ)
@@ -129,24 +125,85 @@ class KKM:
                         return 1
                 return 0
 
+        def __readAnswer(self):
+                """Считать ответ ККМ"""
+                a = self.conn.read(1)
+                if a==ENQ:
+                        self.conn.write(ACK)
+                        time.sleep(T1)
+                        a = self.conn.read(1)
+                        if a==STX:
+                         cmd      = self.conn.read(1)
+                         print "cmd = " + cmd
+                         if cmd == U:
+                            errcode  = self.conn.read(1)
+                            print "errcode = " + hexStr(errcode)
+
+                            i = 0
+                            data = []
+                            while True:
+                                data.insert(i, self.conn.read(1))
+                                print "\n".join(str(value) for value in data)
+                                if data[i] == ETX:
+                                    data[i] = None
+                                    break 
+                                i = i + 1
+                            if data[1] != None:
+                                print "data = ".join(str(value) for value in data)
+
+                         crc = self.conn.read(1)
+            
+                         print "crc = " + hexStr(crc)
+                         if data[1] == None:
+                            mycrc = LRC(cmd+errcode+ETX)
+                         else:
+                            mycrc = LRC(cmd+errcode.join(str(value) for value in data)+ETX)
+                         if int(ord(crc))!=int(mycrc):
+                                    self.conn.write(NAK)
+                                    raise RuntimeError("Wrong crc %i must be %i " % (mycrc,ord(crc)))
+                         self.conn.write(ACK)
+                         self.conn.flush()
+                         time.sleep(T1)
+                         if ord(errcode)!=0:
+                                 raise kkmException(ord(errcode))
+                         return {'cmd':cmd,'errcode':ord(errcode),'data':data}
+                        else:
+                                raise RuntimeError("a!=STX %s %s" % (hex(ord(a)),hex(ord(STX))))
+                elif a==NAK:
+                        return None
+                else:
+                        raise RuntimeError("a!=ENQ")
+
+
 
         def __sendCommand(self,cmd,params):
                 """Стандартная обработка команды"""
-                self.conn.flush()
-                data   = DEFAULT_PASSWORD + chr(cmd) 
-                try:
-                    data = data + chr(params)
-                except:
-                    data = data + params
-                data = data + ETX
-                #print "length="+str(len(params))
-                crc = LRC(data)
-                self.conn.write(STX+data+chr(crc))
-                #dbg(hexStr(STX+content+crc))
-                time.sleep(0.5)
-                self.conn.read()
-                self.conn.flush()
-                self.conn.write(EOT)
+                def oneRound():
+                    self.conn.flush()
+                    data   = DEFAULT_PASSWORD + chr(cmd) 
+                    try:
+                        data = data + chr(params)
+                    except:
+                        data = data + params
+                    data = data + ETX
+                    #print "length="+str(len(params))
+                    crc = LRC(data)
+                    self.conn.write(STX+data+chr(crc))
+                    #dbg(hexStr(STX+content+crc))
+                    time.sleep(T1)
+                oneRound()
+                tires = 1
+                while True:
+                    if self.conn.read(1) == ACK:
+                        self.conn.write(EOT)
+                        break
+                    elif tires <= MAX_TRIES:
+                        oneRound()
+                        tires = tires + 1
+                    else:
+                        print "Превышено  максимальное кол-во попыток отправки команды"
+                        break
+                    self.conn.flush()
                 return OK
 
           
@@ -155,6 +212,28 @@ class KKM:
                 """Гудок"""
                 self.__clearAnswer()
                 self.__sendCommand(0x47,'')
+
+        def cashIncome(self,count):
+                """Внесение денег"""
+                self.__clearAnswer()
+                bin_summ = pack('l',float2100int(count)).ljust(5,chr(0x0))
+                self.__sendCommand(0x49 + 0x00,bin_summ)
+                a = self.__readAnswer()
+                cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+                print("Cmd = " + cmd + "Errorcode = " + errcode + "data = " + data) 
+                """ПОНЯТЬ ДЛЯ ЧЕГО ЭТО И ЧТО ТУДА ПИСАТЬ"""
+                #self.DOC_NUM    = unpack('i',data[0]+data[1]+chr(0x0)+chr(0x0))[0]
+
+        def cashOutcome(self,count):
+                """Выплата денег"""
+                self.__clearAnswer()
+                bin_summ = pack('l',float2100int(count)).ljust(5,chr(0x0))
+                self.__sendCommand(0x4f,self.password+bin_summ)
+                a = self.__readAnswer()
+                cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+                """ПОНЯТЬ ДЛЯ ЧЕГО ЭТО И ЧТО ТУДА ПИСАТЬ"""
+                #self.OP_CODE    = ord(data[0])
+                #self.DOC_NUM    = unpack('i',data[1]+data[2]+chr(0x0)+chr(0x0))[0]
 
 
 try:
@@ -174,10 +253,12 @@ try:
     print("connect frk") 
     kkm.Beep()
     print("Beep") 
+    kkm.cashIncome(10000)
+    print("cashIncome") 
 except Exception as e: 
     print(e)
     err= 1 
-    traceback.print_exc(file=sys.stdout)
+    #traceback.print_exc(file=sys.stdout)
     #self.ser.close()//for renull
     print("not connect frk")
 
