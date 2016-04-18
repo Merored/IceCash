@@ -103,19 +103,30 @@ class KKM:
                         self.conn.flush()
                         self.conn.write(ENQ)
                         a = self.conn.read(1)
+                        print("__clearAnswer = " + hexStr(a))
                         time.sleep(T7)
                         if a==ACK:
+                                self.conn.write(EOT)
+                                print("Clear answer ACK")
                                 return 1
                         elif a==STX:
-                                a = self.conn.read(1)
+                                print("Clear answer STX")
                                 time.sleep(T1)
-                                if a==STX:
-                                       time.sleep(T5)
-                                       self.conn.write(EOT)
-                                time.sleep(T1)
-                                self.conn.write(EOT)
-                                time.sleep(T1)
-                                return 2
+                                while True:
+                                    a = self.conn.read(1)
+                                    print ( " __clearAnswer  a = " + hexStr(a))
+                                    time.sleep(0.2)
+                                    if a == ETX:
+                                        time.sleep(0.2)
+                                        a = self.conn.read(1)
+                                        self.conn.write(ACK)
+                                    if a == EOT:
+                                        break 
+  
+                                self.conn.write(ACK)
+                                if a == EOT:
+                                    time.sleep(T1)
+                                    return 1
                         else:
                                 raise RuntimeError("Something wrong")
                 n=0
@@ -128,6 +139,7 @@ class KKM:
         def __readAnswer(self):
                 """Считать ответ ККМ"""
                 a = self.conn.read(1)
+                print("__readAnswer = " + hexStr(a))
                 if a==ENQ:
                         self.conn.write(ACK)
                         time.sleep(T1)
@@ -161,7 +173,8 @@ class KKM:
                          if int(ord(crc))!=int(mycrc):
                                     self.conn.write(NAK)
                                     raise RuntimeError("Wrong crc %i must be %i " % (mycrc,ord(crc)))
-                         self.conn.write(ACK)
+                         if self.conn.read(1) == EOT:
+                            self.conn.write(ACK)
                          self.conn.flush()
                          time.sleep(T1)
                          if ord(errcode)!=0:
@@ -178,8 +191,12 @@ class KKM:
 
         def __sendCommand(self,cmd,params):
                 """Стандартная обработка команды"""
+                self.conn.write(ENQ)
+                tires = 0
                 def oneRound():
+
                     self.conn.flush()
+                    print ( "__sendCommand =  " + str(cmd))
                     data   = DEFAULT_PASSWORD + chr(cmd) 
                     try:
                         data = data + chr(params)
@@ -191,21 +208,53 @@ class KKM:
                     self.conn.write(STX+data+chr(crc))
                     #dbg(hexStr(STX+content+crc))
                     time.sleep(T1)
-                oneRound()
+                a = self.conn.read(1)
+                if a == ACK:
+                    oneRound()
                 tires = 1
                 while True:
-                    if self.conn.read(1) == ACK:
+                    a = self.conn.read(1)
+                    if a == ACK:
                         self.conn.write(EOT)
                         break
                     elif tires <= MAX_TRIES:
+                        print ( " __sendCommand a = " + hexStr(a))
                         oneRound()
                         tires = tires + 1
                     else:
                         print "Превышено  максимальное кол-во попыток отправки команды"
+                        return()
                         break
+
                     self.conn.flush()
                 return OK
 
+
+        def inMode(self,mode,):
+            """Режим – устанавливаемый режим (двоично-десятичное число):
+                1 - Режим регистрации.
+                2 - Режим отчетов без гашения.
+                3 - Режим отчетов с гашением.
+                4 - Режим программирования.
+                5 - Режим доступа к ФП.
+                6 - Режим доступа к ЭКЛЗ.
+            Пароль – 8 двоично-десятичных символов, пароль для входа в указанный режим
+            (все пароли, кроме пароля доступа к ФП, программируются в таблице паролей
+            ККТ, пароль доступа к ФП изменяется при проведении
+            фискализации / перерегистрации).
+            """
+            self.__clearAnswer()
+            self.__sendCommand(0x56,chr(0x01) + chr(0x00) + chr(0x00) + chr(0x00) + chr(0x01))
+            a = self.__readAnswer()
+            cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+            print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))
+
+        def outMode(self):
+            self.__clearAnswer()
+            self.__sendCommand(0x48,'')
+            a = self.__readAnswer()
+            cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+            print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))
           
 
         def Beep(self):
@@ -220,7 +269,7 @@ class KKM:
                 self.__sendCommand(0x49 + 0x00,bin_summ)
                 a = self.__readAnswer()
                 cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
-                print("Cmd = " + cmd + "Errorcode = " + errcode + "data = " + data) 
+                print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
                 """ПОНЯТЬ ДЛЯ ЧЕГО ЭТО И ЧТО ТУДА ПИСАТЬ"""
                 #self.DOC_NUM    = unpack('i',data[0]+data[1]+chr(0x0)+chr(0x0))[0]
 
@@ -228,13 +277,41 @@ class KKM:
                 """Выплата денег"""
                 self.__clearAnswer()
                 bin_summ = pack('l',float2100int(count)).ljust(5,chr(0x0))
-                self.__sendCommand(0x4f,self.password+bin_summ)
+                self.__sendCommand(0x4f + 0x00,bin_summ)
                 a = self.__readAnswer()
                 cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+                print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
                 """ПОНЯТЬ ДЛЯ ЧЕГО ЭТО И ЧТО ТУДА ПИСАТЬ"""
                 #self.OP_CODE    = ord(data[0])
                 #self.DOC_NUM    = unpack('i',data[1]+data[2]+chr(0x0)+chr(0x0))[0]
 
+        def openCheck(self,flag1,flag2,flag3,ctype):
+            """Команда:     8DH. Длина сообщения: 6 байт.
+                     • Пароль оператора (4 байта)
+                     • Флаги (3 байт): 0 – выполнить операцию, 
+                                       1 – режим проверки операции
+                                       3 – буферизировать документ (Если 3-й бит = 1, то после успешного выполнения команды ККТ переходит в режим 1.5.)
+
+                     • Тип документа (1 байт): 1 – чек продажи,
+                                               2 – чек возврата продажи,
+                                               3 – чек аннулирования продажи,
+                                               4 – чек покупки,
+                                               5 – чек возврата покупки,
+                                               6 – чек аннулирования покупки. 
+                                               Остальные значения зарезервированы и не используются.
+            """
+            self.__clearAnswer()
+            if ctype not in range(0,4):
+                   raise RuntimeError("Check type may be only 0,1,2,3 value")
+            self.outMode()
+            self.inMode(1)
+            self.__sendCommand(0x92,chr(flag1) + chr(flag2) + chr(flag3) + chr(ctype))
+            a = self.__readAnswer()
+            cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+            print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
+            #self.OP_CODE    = ord(data[0])
+            self.outMode()
+            return errcode
 
 try:
     ser = serial.Serial(0, 9600,\
@@ -253,12 +330,12 @@ try:
     print("connect frk") 
     kkm.Beep()
     print("Beep") 
-    kkm.cashIncome(10000)
+    kkm.openCheck(1,0,0,1)
     print("cashIncome") 
 except Exception as e: 
     print(e)
     err= 1 
-    #traceback.print_exc(file=sys.stdout)
+    traceback.print_exc(file=sys.stdout)
     #self.ser.close()//for renull
     print("not connect frk")
 
