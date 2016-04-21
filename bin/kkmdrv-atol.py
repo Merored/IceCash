@@ -138,6 +138,7 @@ class KKM:
 
         def __readAnswer(self):
                 """Считать ответ ККМ"""
+
                 a = self.conn.read(1)
                 print("__readAnswer = " + hexStr(a))
                 if a==ENQ:
@@ -208,16 +209,20 @@ class KKM:
                     self.conn.write(STX+data+chr(crc))
                     #dbg(hexStr(STX+content+crc))
                     time.sleep(T1)
-                a = self.conn.read(1)
-                if a == ACK:
-                    oneRound()
+
                 tires = 1
+                sendCMD = False
                 while True:
                     a = self.conn.read(1)
-                    if a == ACK:
+                    if a == ACK and tires > 1 and sendCMD==False:
+                        print ( " writeCMDself.conn.write(EOT)")
                         self.conn.write(EOT)
                         break
-                    elif tires <= MAX_TRIES:
+                    elif  a == ACK:
+                        print ( " __sendCommand CMD = " + str(cmd))
+                        oneRound()
+                        tires = tires + 1
+                    elif tires <= MAX_TRIES and sendCMD==False:
                         print ( " __sendCommand a = " + hexStr(a))
                         oneRound()
                         tires = tires + 1
@@ -266,7 +271,7 @@ class KKM:
                 """Внесение денег"""
                 self.__clearAnswer()
                 bin_summ = pack('l',float2100int(count)).ljust(5,chr(0x0))
-                self.__sendCommand(0x49 + 0x00,bin_summ)
+                self.__sendCommand(0x49 + 0x0,bin_summ)
                 a = self.__readAnswer()
                 cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
                 print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
@@ -305,6 +310,7 @@ class KKM:
                    raise RuntimeError("Check type may be only 0,1,2,3 value")
             self.outMode()
             self.inMode(1)
+            self.__clearAnswer()
             self.__sendCommand(0x92,chr(flag1) + chr(flag2) + chr(flag3) + chr(ctype))
             a = self.__readAnswer()
             cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
@@ -331,7 +337,7 @@ try:
     kkm.Beep()
     print("Beep") 
     kkm.openCheck(1,0,0,1)
-    print("cashIncome") 
+    print("openCheck") 
 except Exception as e: 
     print(e)
     err= 1 
