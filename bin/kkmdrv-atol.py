@@ -290,7 +290,7 @@ class KKM:
                 #self.OP_CODE    = ord(data[0])
                 #self.DOC_NUM    = unpack('i',data[1]+data[2]+chr(0x0)+chr(0x0))[0]
 
-        def openCheck(self,flag1,flag2,flag3,ctype):
+        def openCheck(self,flag,ctype):
             """Команда:     8DH. Длина сообщения: 6 байт.
                      • Пароль оператора (4 байта)
                      • Флаги (3 байт): 0 – выполнить операцию, 
@@ -311,7 +311,7 @@ class KKM:
             self.outMode()
             self.inMode(1)
             self.__clearAnswer()
-            self.__sendCommand(0x92,chr(flag1) + chr(flag2) + chr(flag3) + chr(ctype))
+            self.__sendCommand(0x92,chr(flag) + chr(ctype))
             a = self.__readAnswer()
             cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
             print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
@@ -336,7 +336,7 @@ try:
     print("connect frk") 
     kkm.Beep()
     print("Beep") 
-    kkm.openCheck(1,0,0,1)
+    kkm.openCheck(1,1)
     print("openCheck") 
 except Exception as e: 
     print(e)
