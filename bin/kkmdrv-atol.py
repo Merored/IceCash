@@ -41,11 +41,57 @@ def hexStr(s):
     result = []
     for c in s: result.append(hex(ord(c)))
     return string.join(result,' ')
-
-def float2100int(f,digits=2):
-        mask = "%."+str(digits)+'f'
-        s    = mask % f
-        return int(s.replace('.',''))
+def priceRed(money):
+    """
+    Приобразует float число в то, что можно передать в ККМ как кол-во каких либо денег
+    Диапазон возможного значения цены и т д, где 1 = 1 коп. 
+    0000000000..9999999999 (10 знаков)
+    Пример: 
+    Передаём число 1.11 (Допустим 1 руб 11 коп) функция вернёт строку = 0x00 0x00 0x00 0x0a 0x01`
+    """
+    moneylist = (int(money*100))
+    chet = False
+    if moneylist > 9999999999:
+        raise RuntimeError("Число должно быть в диапазоне 0..9999999999")
+    if moneylist < 100000000: 
+        if moneylist < 1000000:
+            if moneylist < 10000:
+                if moneylist < 100:
+                    result = chr(0x00) + chr(0x00) + chr(0x00) + chr(0x00)
+                else:
+                    result = chr(0x00) + chr(0x00) + chr(0x00)
+            else: 
+                result = chr(0x00) + chr(0x00)
+        else:
+            result = chr(0x00) 
+    first = True
+    chet = False
+    simvol = 0
+    for i in str(moneylist) :
+        if chet: 
+            simvol = int(i)*10
+            chet = False
+            continue
+        elif moneylist > 99999999 or moneylist > 999999 or moneylist > 9999 or moneylist > 99 or moneylist > 1 and first: 
+            simvol = int(i) + simvol
+            result = result + chr(int(str(simvol), 16))
+            first = False
+            chet = True
+            simvol = 0
+            continue
+        if moneylist > 999999999 or moneylist > 9999999 or moneylist > 99999 or moneylist > 999 or moneylist > 9 and first: 
+            simvol = int(i)*10
+            first = False
+            chet = False
+            continue
+        if chet == False:
+            simvol = int(i) + simvol
+            chet = True
+            result = result + chr(int(str(simvol), 16)) 
+            simvol = 0
+            continue
+    print("result = "+  str(result) + "  Money = " + str(money) )
+    return result
 
 def LRC(buff):
     """Подсчет CRC"""
@@ -156,7 +202,6 @@ class KKM:
                             data = []
                             while True:
                                 data.insert(i, self.conn.read(1))
-                                print "\n".join(str(value) for value in data)
                                 if data[i] == ETX:
                                     data[i] = None
                                     break 
@@ -223,9 +268,13 @@ class KKM:
                         oneRound()
                         tires = tires + 1
                     elif tires <= MAX_TRIES and sendCMD==False:
-                        print ( " __sendCommand a = " + hexStr(a))
+                        print ( " __sendCommand a = " + str(a))
                         oneRound()
                         tires = tires + 1
+                    elif a == NAK: 
+                        self.conn.write(ENQ)
+                        tires = tires + 1
+                        print ( " __sendCommand a = NAK")
                     else:
                         print "Превышено  максимальное кол-во попыток отправки команды"
                         return()
@@ -291,15 +340,15 @@ class KKM:
                 #self.DOC_NUM    = unpack('i',data[1]+data[2]+chr(0x0)+chr(0x0))[0]
 
         def openCheck(self,flag,ctype):
-            """Команда:     8DH. Длина сообщения: 6 байт.
+            """Команда:     92H<Флаги (1)><Тип чека (1)> 
                      • Пароль оператора (4 байта)
-                     • Флаги (3 байт): 0 – выполнить операцию, 
+                     • Флаги (1 бит): 0 – выполнить операцию, 
                                        1 – режим проверки операции
                                        3 – буферизировать документ (Если 3-й бит = 1, то после успешного выполнения команды ККТ переходит в режим 1.5.)
 
                      • Тип документа (1 байт): 1 – чек продажи,
                                                2 – чек возврата продажи,
-                                               3 – чек аннулирования продажи,
+                                               3 – чек аннулирования продажи, (В большинстве моделей поддерживаются только первые три типа чеков)
                                                4 – чек покупки,
                                                5 – чек возврата покупки,
                                                6 – чек аннулирования покупки. 
@@ -316,8 +365,73 @@ class KKM:
             cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
             print("Cmd = " + cmd + " Errorcode = " + str(errcode) + " data = " + str(data[1]))  
             #self.OP_CODE    = ord(data[0])
-            self.outMode()
+            #self.outMode()
             return errcode
+
+
+
+        def Sale(self,flags,count,price,department=0):
+            """Продажа
+                Команда:     52H<Флаги(1)><Цена(5)><Количество(5)><Секция(1)>. 
+                     • Флаги (1 байт): 0-й (младший) бит: 0 – выполнить операцию, 1 – режим проверки операции (см стр. 53);
+                                       1-й бит: 0 – проверять денежную наличность, 1 – не проверять (см.команду Аннулирование)
+                     • Количество (5 байт) 0000000000..9999999999
+                     • Цена (5 байт) 0000000000..9999999999
+                     • Секция (1 байт) 0...30 Секция – двоично-десятичное число 00 .. 30 – секция, в которую осуществляется регистрация.
+                                              Примечание 1: Если Секция = 0, то регистрация произведется в 1-ю секцию, но на чеке 
+                                              и контрольной ленте не будут напечатаны номер и название секции. 
+
+            """
+            self.__clearAnswer()
+            if count < 0 or count > 9999999999:
+                   raise RuntimeError("Count myst be in range 0..9999999999")
+            if price <0 or price > 9999999999:
+                   raise RuntimeError("Price myst be in range 0..9999999999")
+            if not department in range(0,16):
+                   raise RuntimeError("Department myst be in range 1..16")
+
+
+            bdep   = chr(department)
+            self.__sendCommand(0x52,chr(0x00)  +  priceRed(9998)  + priceRed(100)  + chr(0x01))
+            time.sleep(T1)
+            a = self.__readAnswer()
+        #            time.sleep(0.5)
+            cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+            self.OP_CODE    = ord(data[0])
+            return errcode
+
+
+        def closeCheck(self,summa,text=u"",summa2=0,summa3=0,summa4=0,sale=0,taxes=[0,0,0,0][:]):
+            """
+                Команда:     4AH. Длина сообщения: 71 байт.
+                     • Пароль оператора (4 байта)
+                     • Сумма наличных (5 байт) 0000000000...9999999999
+                     • Сумма типа оплаты 2 (5 байт) 0000000000...9999999999
+                     • Сумма типа оплаты 3 (5 байт) 0000000000...9999999999
+                     • Сумма типа оплаты 4 (5 байт) 0000000000...9999999999
+                     • Скидка/Надбавка(в случае отрицательного значения) в % на чек от 0 до 99,99
+                       % (2 байта со знаком) -9999...9999
+                     • Налог 1 (1 байт) «0» – нет, «1»...«4» – налоговая группа
+                     • Налог 2 (1 байт) «0» – нет, «1»...«4» – налоговая группа
+                     • Налог 3 (1 байт) «0» – нет, «1»...«4» – налоговая группа
+                     • Налог 4 (1 байт) «0» – нет, «1»...«4» – налоговая группа
+                     • Текст (40 байт)
+                Ответ:       85H. Длина сообщения: 8 байт.
+                     • Код ошибки (1 байт)
+                     • Порядковый номер оператора (1 байт) 1...30
+                     • Сдача (5 байт) 0000000000...9999999999
+            """
+            self.__clearAnswer()
+
+            self.__sendCommand(0x4A,self.password+bsumma+bsumma2+bsumma3+bsumma4+bsale+btaxes+btext)
+            time.sleep(0.5) # DOOM поставил а потом убрал
+            a = self.__readAnswer()
+            cmd,errcode,data = (a['cmd'],a['errcode'],a['data'])
+            self.OP_CODE    = ord(data[0])
+            #Сдачу я не считаю....
+            #time.sleep(0.5) # Тут не успевает иногда
+            return errcode
+
 
 try:
     ser = serial.Serial(0, 9600,\
@@ -336,8 +450,13 @@ try:
     print("connect frk") 
     kkm.Beep()
     print("Beep") 
-    kkm.openCheck(1,1)
+    kkm.openCheck(0,1)
     print("openCheck") 
+    kkm.Beep()
+    print("Beep") 
+    kkm.Sale(0x00,1,100.00)
+    print("sale") 
+
 except Exception as e: 
     print(e)
     err= 1 
